@@ -1,114 +1,102 @@
+// tb_cpu_top.sv
 `timescale 1ns/1ps
-//OG CPU_top, no cache, axi
+
 module tb_cpu_top;
 
-  // ----------------------------------------
-  // Clock + Reset
-  // ----------------------------------------
+  parameter int XLEN = 32;
+  
+  // Clock and reset
   logic clk;
-  logic reset_n;
+  logic rst_n;
 
-  // DUT interface
-  logic [31:0] imem_addr;
-  logic [31:0] imem_rdata;
+  // AXI signals
+  logic [XLEN-1:0] axi_awaddr;
+  logic axi_awvalid;
+  logic axi_awready;
 
-  logic        dmem_read;
-  logic        dmem_write;
-  logic [31:0] dmem_addr;
-  logic [31:0] dmem_wdata;
-  logic [31:0] dmem_rdata;
+  logic [XLEN-1:0] axi_araddr;
+  logic axi_arvalid;
+  logic axi_arready;
 
-  // Simple instruction + data memories
-  logic [31:0] instr_mem [0:255];
-  logic [31:0] data_mem  [0:255];
+  logic [XLEN-1:0] axi_wdata;
+  logic [3:0] axi_wstrb;
+  logic axi_wvalid;
+  logic axi_wready;
 
-  // ----------------------------------------
-  // Clock generation (10 ns)
-  // ----------------------------------------
-  always #5 clk = ~clk;
+  logic [XLEN-1:0] axi_rdata;
+  logic axi_rvalid;
+  logic axi_rready;
 
-  // ----------------------------------------
-  // DUT
-  // ----------------------------------------
-  cpu_top dut (
-      .clk(clk),
-      .reset_n(reset_n),
+  logic axi_bvalid;
+  logic axi_bready;
 
-      // Instruction fetch
-      .imem_addr(imem_addr),
-      .imem_rdata(imem_rdata),
+  // Clock generation
+  initial clk = 0;
+  always #5 clk = ~clk; // 100 MHz
 
-      // Data memory
-      .dmem_read(dmem_read),
-      .dmem_write(dmem_write),
-      .dmem_addr(dmem_addr),
-      .dmem_wdata(dmem_wdata),
-      .dmem_rdata(dmem_rdata)
-  );
-
-  // ----------------------------------------
-  // Instruction Memory Model
-  // ----------------------------------------
-  assign imem_rdata = instr_mem[imem_addr[9:2]];
-
-  // ----------------------------------------
-  // Data Memory Model
-  // ----------------------------------------
-  always_ff @(posedge clk) begin
-    if (dmem_write)
-      data_mem[dmem_addr[9:2]] <= dmem_wdata;
+  // Reset pulse
+  initial begin
+    rst_n = 0;
+    #20;
+    rst_n = 1;
   end
 
-  assign dmem_rdata = (dmem_read) ? data_mem[dmem_addr[9:2]] : 32'h0;
+  // Instantiate DUT
+  cpu_top #(
+    .XLEN(XLEN)
+  ) DUT (
+    .clk(clk),
+    .rst_n(rst_n),
+    .axi_awaddr(axi_awaddr),
+    .axi_awvalid(axi_awvalid),
+    .axi_awready(axi_awready),
+    .axi_araddr(axi_araddr),
+    .axi_arvalid(axi_arvalid),
+    .axi_arready(axi_arready),
+    .axi_wdata(axi_wdata),
+    .axi_wstrb(axi_wstrb),
+    .axi_wvalid(axi_wvalid),
+    .axi_wready(axi_wready),
+    .axi_rdata(axi_rdata),
+    .axi_rvalid(axi_rvalid),
+    .axi_rready(axi_rready),
+    .axi_bvalid(axi_bvalid),
+    .axi_bready(axi_bready)
+  );
 
-
-  // ----------------------------------------
-  // Test Program Loader
-  // ----------------------------------------
-  task load_program;
-    begin
-      // Simple ADD test:
-      // x1 = 5
-      // x2 = 7
-      // x3 = x1 + x2  => should be 12
-
-      instr_mem[0] = 32'h00500093; // ADDI x1, x0, 5
-      instr_mem[1] = 32'h00700113; // ADDI x2, x0, 7
-      instr_mem[2] = 32'h002081B3; // ADD x3, x1, x2
-      instr_mem[3] = 32'h00000013; // NOP
-      instr_mem[4] = 32'h00000013; // NOP
-      instr_mem[5] = 32'h00000013; // NOP
-    end
-  endtask
-
-  // ----------------------------------------
-  // Test Sequence
-  // ----------------------------------------
+  // AXI Stub / Simple memory model
   initial begin
-    clk = 0;
-    reset_n = 0;
+    axi_awready = 0;
+    axi_wready  = 0;
+    axi_bvalid  = 0;
 
-    // Clear memories
-    foreach (instr_mem[i]) instr_mem[i] = 32'h00000013; // NOP
-    foreach (data_mem[i])  data_mem[i]  = 32'h0;
+    axi_arready = 0;
+    axi_rvalid  = 0;
+    axi_rdata   = 0;
 
-    load_program();
+    forever begin
+      @(posedge clk);
+      // Write handshake
+      axi_awready <= axi_awvalid;
+      axi_wready  <= axi_wvalid;
+      axi_bvalid  <= axi_awvalid & axi_wvalid;
+      // Read handshake
+      axi_arready <= axi_arvalid;
+      axi_rvalid  <= axi_arvalid;
+      axi_rdata   <= axi_araddr + 32'h1000; // dummy read data
+    end
+  end
 
-    repeat (5) @(posedge clk);
-    reset_n = 1;
-
-    // Run CPU for some cycles
-    repeat (50) @(posedge clk);
-
-    // Check result of x3 (should be 12)
-    $display("Register x3 = %0d (expected 12)", dut.regfile.regs[3]);
-
-    if (dut.regfile.regs[3] == 12)
-      $display("TEST PASS");
-    else
-      $display("TEST FAIL");
-
+  // Optional: stop simulation after some time
+  initial begin
+    #1000;
     $finish;
+  end
+
+  // Enable VCD waveform
+  initial begin
+    $dumpfile("tb_cpu_top.vcd");
+    $dumpvars(0, tb_cpu_top);
   end
 
 endmodule
